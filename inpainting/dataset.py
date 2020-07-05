@@ -1,17 +1,20 @@
-import os
 import glob
+import os
+import random
+from typing import Tuple
+
+import cv2
+import numpy as np
 import scipy
 import torch
-import random
-import numpy as np
 import torchvision.transforms.functional as F
 from PIL import Image
-from scipy.misc import imread
-import cv2
+from iglovikov_helper_functions.utils.image_utils import load_rgb, load_grayscale
+
 
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self, image_path, mask_path, mask_mode, target_size, augment=True, training=True, mask_reverse = False):
-        super(Dataset, self).__init__()
+    def __init__(self, image_path, mask_path, mask_mode, target_size, augment=True, training=True, mask_reverse=False):
+        super().__init__()
         self.augment = augment
         self.training = training
         self.data = self.load_list(image_path)
@@ -24,20 +27,14 @@ class Dataset(torch.utils.data.Dataset):
         # in test mode, there's a one-to-one relationship between mask and image
         # masks are loaded non random
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data)
 
-    def __getitem__(self, index):
-        try:
-            item = self.load_item(index)
-        except:
-            print('loading error: ' + self.data[index])
-            item = self.load_item(0)
-
-        return item
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.load_item(index)
 
     def load_item(self, index):
-        img = imread(self.data[index])
+        img = load_rgb(self.data[index])
         if self.training:
             img = self.resize(img)
         else:
@@ -52,77 +49,78 @@ class Dataset(torch.utils.data.Dataset):
         return self.to_tensor(img), self.to_tensor(mask)
 
     def load_mask(self, img, index):
-        imgh, imgw = img.shape[0:2]
-        
-        #external mask, random order
+        # imgh, imgw = img.shape[:2]
+
+        # external mask, random order
         if self.mask_type == 0:
             mask_index = random.randint(0, len(self.mask_data) - 1)
-            mask = imread(self.mask_data[mask_index])
+            mask = load_grayscale(self.mask_data[mask_index])
             mask = self.resize(mask, False)
-            mask = (mask > 0).astype(np.uint8)       # threshold due to interpolation
+            mask = (mask > 0).astype(np.uint8)  # threshold due to interpolation
             if self.mask_reverse:
                 return (1 - mask) * 255
             else:
                 return mask * 255
-        #generate random mask
+        # generate random mask
         if self.mask_type == 1:
             mask = 1 - generate_stroke_mask([256, 256])
             return (mask * 255).astype(np.uint8)
-        
-        #external mask, fixed order
+
+        # external mask, fixed order
         if self.mask_type == 2:
             mask_index = index
-            mask = imread(self.mask_data[mask_index])
+            mask = load_grayscale(self.mask_data[mask_index])
             mask = self.resize(mask, False)
-            mask = (mask > 0).astype(np.uint8)       # threshold due to interpolation
+            mask = (mask > 0).astype(np.uint8)  # threshold due to interpolation
             if self.mask_reverse:
                 return (1 - mask) * 255
             else:
                 return mask * 255
 
-    def resize(self, img, aspect_ratio_kept = True, fixed_size = False, centerCrop=False):
-        
+    def resize(
+        self, img: np.ndarray, aspect_ratio_kept: bool = True, fixed_size: bool = False, center_crop: bool = False
+    ) -> np.ndarray:
+        image_height, image_width = img.shape[:2]
         if aspect_ratio_kept:
-            imgh, imgw = img.shape[0:2]
-            side = np.minimum(imgh, imgw)
+            side = np.minimum(image_height, image_width)
             if fixed_size:
-                if centerCrop:
-                # center crop
-                    j = (imgh - side) // 2
-                    i = (imgw - side) // 2
-                    img = img[j:j + side, i:i + side, ...]
+                if center_crop:
+                    # center crop
+                    j = (image_height - side) // 2
+                    i = (image_width - side) // 2
+                    img = img[j : j + side, i : i + side, ...]
                 else:
-                    j = (imgh - side)
-                    i = (imgw - side)
+                    j = image_height - side
+                    i = image_width - side
                     h_start = 0
                     w_start = 0
                     if j != 0:
                         h_start = random.randrange(0, j)
                     if i != 0:
                         w_start = random.randrange(0, i)
-                    img = img[h_start:h_start + side, w_start:w_start + side, ...]
+                    img = img[h_start : h_start + side, w_start : w_start + side, ...]
             else:
                 if side <= self.target_size:
-                    j = (imgh - side)
-                    i = (imgw - side)
+                    j = image_height - side
+                    i = image_width - side
                     h_start = 0
                     w_start = 0
                     if j != 0:
                         h_start = random.randrange(0, j)
                     if i != 0:
                         w_start = random.randrange(0, i)
-                    img = img[h_start:h_start + side, w_start:w_start + side, ...]
+                    img = img[h_start : h_start + side, w_start : w_start + side, ...]
                 else:
                     side = random.randrange(self.target_size, side)
-                    j = (imgh - side)
-                    i = (imgw - side)
+                    j = image_height - side
+                    i = image_width - side
                     h_start = random.randrange(0, j)
                     w_start = random.randrange(0, i)
-                    img = img[h_start:h_start + side, w_start:w_start + side, ...]
+                    img = img[h_start : h_start + side, w_start : w_start + side, ...]
         img = scipy.misc.imresize(img, [self.target_size, self.target_size])
         return img
 
-    def to_tensor(self, img):
+    def to_tensor(self, img: np.ndarray) -> torch.Tensor:
         img = Image.fromarray(img)
         img_t = F.to_tensor(img).float()
         return img_t
@@ -130,30 +128,33 @@ class Dataset(torch.utils.data.Dataset):
     def load_list(self, path):
         if isinstance(path, str):
             if path[-3:] == "txt":
-                line = open(path,"r")
+                line = open(path, "r")
                 lines = line.readlines()
                 file_names = []
                 for line in lines:
-                    file_names.append("../../Dataset/Places2/train/data_256"+line.split(" ")[0])
+                    file_names.append("../../Dataset/Places2/train/data_256" + line.split(" ")[0])
                 return file_names
             if os.path.isdir(path):
-                path = list(glob.glob(path + '/*.jpg')) + list(glob.glob(path + '/*.png'))
+                path = list(glob.glob(path + "/*.jpg")) + list(glob.glob(path + "/*.png"))
                 path.sort()
                 return path
-            if os.path.isfile(path):
-                try:
-                    return np.genfromtxt(path, dtype=np.str, encoding='utf-8')
-                except:
-                    return [path]
+            # if os.path.isfile(path):
+            #     try:
+            #         return np.genfromtxt(path, dtype=np.str, encoding="utf-8")
+            #     except:
+            #         return [path]
         return []
 
-def generate_stroke_mask(im_size, parts=15, maxVertex=25, maxLength=100, maxBrushWidth=24, maxAngle=360):
-    mask = np.zeros((im_size[0], im_size[1], 1), dtype=np.float32)
+
+def generate_stroke_mask(im_size, parts=15, max_vertex=25, max_length=100, max_brush_width=24, max_angle=360):
+    image_height, image_width = im_size
+    mask = np.zeros((image_height, image_width, 1), dtype=np.float32)
     for i in range(parts):
-        mask = mask + np_free_form_mask(maxVertex, maxLength, maxBrushWidth, maxAngle, im_size[0], im_size[1])
+        mask = mask + np_free_form_mask(max_vertex, max_length, max_brush_width, max_angle, image_height, image_width)
     mask = np.minimum(mask, 1.0)
-    mask = np.concatenate([mask, mask, mask], axis = 2)
+    mask = np.concatenate([mask, mask, mask], axis=2)
     return mask
+
 
 def np_free_form_mask(maxVertex, maxLength, maxBrushWidth, maxAngle, h, w):
     mask = np.zeros((h, w, 1), np.float32)
